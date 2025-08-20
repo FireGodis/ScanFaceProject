@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>ScanFace Explorer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>📂 ScanFace Explorer</h1>
+  </header>
+
+  <main>
+    <div class="file-explorer">
+      <div class="folder" onclick="openFile('precos')">
+        📑 Tabela de preço dos clientes
+      </div>
+      <div class="folder" onclick="openFile('horarios')">
+        🕒 Horários de funcionamento da empresa
+      </div>
+      <div class="folder protected" onclick="openProtectedFolder()">
+        🔒 Salário dos funcionários
+      </div>
+    </div>
+
+    <div id="file-viewer" class="hidden"></div>
+
+    <!-- Modal de Login -->
+    <div id="login-modal" class="modal hidden">
+      <div class="modal-content">
+        <h2>Acesso Restrito</h2>
+        <label>CPF:</label>
+        <input type="text" id="cpf" placeholder="000.000.000-00">
+        <label>Senha:</label>
+        <input type="password" id="senha">
+        <label>ID de Administrador:</label>
+        <input type="text" id="adminId">
+        <button onclick="validateLogin()">Próximo</button>
+        <button class="close" onclick="closeModal()">Cancelar</button>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <p>Projeto ScanFace - Luiz Henrique, Gustavo Sabino, Eduardo Marinho</p>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
