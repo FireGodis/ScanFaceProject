@@ -4,6 +4,7 @@ import cv2
 import sys
 import numpy as np
 import kivy
+import time
 from kivy.core.window import Window
 from kivy.app import App
 from kivy.clock import Clock
@@ -13,10 +14,30 @@ from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.uix.button import Button
 from kivy.uix.image import Image
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.gridlayout import GridLayout
+from kivy.uix.splitter import Splitter
+from kivy.uix.anchorlayout import AnchorLayout
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.textinput import TextInput
+from kivy.uix.label import Label
+from kivy.config import Config
+from kivy.uix.popup import Popup
+from kivy.uix.label import Label
+from kivy.uix.floatlayout import FloatLayout
+from kivy.core.window import Window
+from kivy.clock import Clock
+from kivy.uix.popup import Popup
+from kivy.uix.label import Label
+from kivy.uix.floatlayout import FloatLayout
+from kivy.core.window import Window
+from kivy.clock import Clock
+from kivy.uix.textinput import TextInput
 from kivy.uix.screenmanager import ScreenManager, Screen, WipeTransition
 from kivy.graphics.texture import Texture
 
 kivy.require('1.11.1')
+Config.set('input', 'mouse', 'mouse,multitouch_on_demand')
 
 
 if not os.path.exists("faces"):
@@ -145,44 +166,169 @@ class FileManagerScreen(Screen):
         self.file_editor = None
         self.editor_text = None
 
-        
-        self.layout = BoxLayout(orientation="vertical", padding=20, spacing=10)
-        self.add_widget(self.layout)
+        # Layout principal (horizontal)
+        self.main_layout = BoxLayout(orientation="horizontal", spacing=10, padding=10)
+        self.add_widget(self.main_layout)
 
-        self.path_label = styled_label("Caminho atual: /")
-        self.layout.add_widget(self.path_label)
+        # Painel esquerdo — navegação
+        self.sidebar = BoxLayout(orientation="vertical", size_hint_x=0.3, spacing=10)
 
-        
-        btn_bar = BoxLayout(size_hint_y=None, height=50, spacing=10)
-        btn_bar.add_widget(styled_button("Nova Pasta", self.create_folder))
-        btn_bar.add_widget(styled_button("Novo Arquivo TXT", self.create_file))
-        btn_bar.add_widget(styled_button("Voltar", lambda *_: setattr(self.manager, 'current', 'home')))
-        self.layout.add_widget(btn_bar)
+        self.path_label = styled_label("📁 Caminho atual:", 18)
+        self.sidebar.add_widget(self.path_label)
 
-       
-        self.files_layout = GridLayout(cols=1, spacing=5)
-        self.layout.add_widget(self.files_layout)
+        self.btn_new_folder = styled_button("➕ Nova Pasta", self.create_folder)
+        self.btn_new_file = styled_button("📝 Novo Arquivo TXT", self.create_file)
+        self.btn_back = styled_button("⬅️ Voltar", lambda *_: setattr(self.manager, 'current', 'home'))
+
+        self.sidebar.add_widget(self.btn_new_folder)
+        self.sidebar.add_widget(self.btn_new_file)
+        self.sidebar.add_widget(self.btn_back)
+
+        self.main_layout.add_widget(self.sidebar)
+
+        # Painel direito — conteúdo da pasta
+        self.files_area = BoxLayout(orientation="vertical", spacing=10)
+        self.scroll_view = ScrollView()
+        self.files_grid = GridLayout(cols=3, spacing=10, padding=10, size_hint_y=None)
+        self.files_grid.bind(minimum_height=self.files_grid.setter('height'))
+
+        self.scroll_view.add_widget(self.files_grid)
+        self.files_area.add_widget(self.scroll_view)
+        self.main_layout.add_widget(self.files_area)
 
     def on_pre_enter(self, *args):
-       
+        """Carrega o diretório do usuário ao entrar"""
         base_dir = os.path.join("pasta_usuarios", self.cpf_logado)
         os.makedirs(base_dir, exist_ok=True)
         self.current_path = base_dir
         self.show_directory(self.current_path)
 
-    def show_directory(self, path):
-        """Atualiza a listagem da pasta atual"""
-        self.files_layout.clear_widgets()
-        self.path_label.text = f"Caminho atual: {os.path.relpath(path, 'pasta_usuarios')}"
+    def restore_files_view(self):
+        """Restaura a view padrão de listagem (scroll + grid) no painel direito."""
+        self.files_area.clear_widgets()
+        if self.scroll_view.parent is None:
+            self.files_area.add_widget(self.scroll_view)
 
-        items = sorted(os.listdir(path))
+    def show_directory(self, path):
+        """Atualiza a visualização da pasta"""
+        if self.scroll_view.parent is None:
+            self.restore_files_view()
+
+        self.files_grid.clear_widgets()
+        self.path_label.text = f"📁 {os.path.relpath(path, 'pasta_usuarios')}"
+
+        try:
+            items = sorted(os.listdir(path))
+        except PermissionError:
+            items = []
+
         for item in items:
             full_path = os.path.join(path, item)
-            if os.path.isdir(full_path):
-                btn = styled_button(f"📁 {item}", lambda _, p=full_path: self.enter_folder(p))
-            else:
-                btn = styled_button(f"📄 {item}", lambda _, p=full_path: self.open_file(p))
-            self.files_layout.add_widget(btn)
+            icon = "📁" if os.path.isdir(full_path) else "📄"
+            btn = styled_button(f"{icon}\n{item}", lambda *_: None)
+            btn.size_hint_y = None
+            btn.height = 100
+
+            # Clique esquerdo → abre
+            btn.bind(on_release=lambda _, p=full_path: self.item_action(p))
+
+            # Clique direito → menu
+            btn.bind(on_touch_down=lambda instance, touch, p=full_path: self.on_right_click(instance, touch, p))
+            self.files_grid.add_widget(btn)
+
+    def on_right_click(self, instance, touch, path):
+        """Cria menu de contexto (deletar/renomear) ao clicar com botão direito."""
+        if touch.button == 'right' and instance.collide_point(*touch.pos):
+            Clock.schedule_once(lambda dt: self.show_context_menu(touch.pos, path), 0.05)
+
+    def show_context_menu(self, pos, path):
+        """Mostra popup com opções: deletar e renomear."""
+        layout = BoxLayout(orientation='vertical', spacing=10, padding=10)
+        popup = Popup(title='Opções', size_hint=(None, None), size=(220, 180), auto_dismiss=True)
+
+        btn_rename = styled_button("✏️ Renomear", lambda *_: (popup.dismiss(), self.rename_item(path)))
+        btn_delete = styled_button("🗑️ Deletar", lambda *_: (popup.dismiss(), self.delete_item(path)))
+
+        layout.add_widget(btn_rename)
+        layout.add_widget(btn_delete)
+
+        popup.add_widget(layout)
+        popup.open()
+
+        popup.pos = (pos[0] - 100, pos[1] - 60)
+
+    def rename_item(self, path):
+        """Renomeia arquivo/pasta"""
+        old_name = os.path.basename(path)
+        layout = BoxLayout(orientation="vertical", spacing=10, padding=10)
+
+        text_input = TextInput(text=old_name, multiline=False, size_hint_y=None, height=40)
+        layout.add_widget(Label(text="Digite o novo nome:"))
+        layout.add_widget(text_input)
+
+        btns = BoxLayout(size_hint_y=None, height=50, spacing=10, padding=10)
+        btn_cancel = styled_button("❌ Cancelar", lambda *_: popup.dismiss())
+        btn_confirm = styled_button("✅ Confirmar", lambda *_: self.confirm_rename(path, text_input.text, popup))
+        btns.add_widget(btn_cancel)
+        btns.add_widget(btn_confirm)
+
+        layout.add_widget(btns)
+
+        popup = Popup(title="Renomear", content=layout, size_hint=(None, None), size=(350, 200))
+        popup.open()
+
+    def confirm_rename(self, old_path, new_name, popup):
+    
+
+        base_dir = os.path.dirname(old_path)
+        new_path = os.path.join(base_dir, new_name)
+
+        try:
+            os.rename(old_path, new_path)
+        except Exception as e:
+            print("Erro ao renomear:", e)
+        else:
+        # Se a pasta renomeada era a atual, atualizar current_path
+            if self.current_path == old_path:
+                self.current_path = new_path
+
+        popup.dismiss()
+        self.show_directory(self.current_path)
+
+
+    def delete_item(self, path):
+        """Deleta arquivo ou pasta (com confirmação se for pasta)."""
+        if os.path.isdir(path):
+            layout = BoxLayout(orientation="vertical", spacing=10, padding=10)
+            layout.add_widget(Label(text=f"Tem certeza que deseja apagar a pasta:\n[b]{os.path.basename(path)}[/b]?", markup=True))
+
+            btns = BoxLayout(size_hint_y=None, height=50, spacing=10, padding=10)
+            btn_cancel = styled_button("❌ Cancelar", lambda *_: popup.dismiss())
+            btn_confirm = styled_button("✅ Confirmar", lambda *_: self.confirm_delete_folder(path, popup))
+
+            btns.add_widget(btn_cancel)
+            btns.add_widget(btn_confirm)
+            layout.add_widget(btns)
+
+            popup = Popup(title="Confirmação", content=layout, size_hint=(None, None), size=(400, 200))
+            popup.open()
+        else:
+            os.remove(path)
+            self.show_directory(self.current_path)
+
+    def confirm_delete_folder(self, path, popup):
+        """Confirma exclusão de pasta e recarrega diretório."""
+        import shutil
+        shutil.rmtree(path, ignore_errors=True)
+        popup.dismiss()
+        self.show_directory(self.current_path)
+
+    def item_action(self, path):
+        """Abre pasta ou arquivo conforme o tipo"""
+        if os.path.isdir(path):
+            self.enter_folder(path)
+        else:
+            self.open_file(path)
 
     def enter_folder(self, path):
         """Entra na pasta"""
@@ -190,53 +336,51 @@ class FileManagerScreen(Screen):
         self.show_directory(path)
 
     def create_folder(self, instance):
-        """Cria uma nova pasta dentro da atual"""
+        """Cria nova pasta"""
         folder_name = f"NovaPasta_{len(os.listdir(self.current_path))}"
         new_path = os.path.join(self.current_path, folder_name)
         os.makedirs(new_path, exist_ok=True)
         self.show_directory(self.current_path)
 
     def create_file(self, instance):
-        """Cria um novo arquivo de texto dentro da atual"""
+        """Cria novo arquivo"""
         file_name = f"NovoArquivo_{len(os.listdir(self.current_path))}.txt"
         new_file = os.path.join(self.current_path, file_name)
         with open(new_file, "w", encoding="utf-8") as f:
-            f.write("")  # arquivo vazio
+            f.write("")
         self.show_directory(self.current_path)
 
     def open_file(self, file_path):
-        """Abre o editor de texto simples"""
-        self.layout.clear_widgets()
+        """Abre o editor de texto no painel direito"""
+        self.files_area.clear_widgets()
         self.file_editor = file_path
 
-        self.layout.add_widget(styled_label(f"Editando: {os.path.basename(file_path)}"))
+        title = styled_label(f"✏️ Editando: {os.path.basename(file_path)}", 18)
+        self.files_area.add_widget(title)
 
-        
         with open(file_path, "r", encoding="utf-8") as f:
             content = f.read()
 
-        self.editor_text = TextInput(text=content, multiline=True, size_hint_y=0.8)
-        self.layout.add_widget(self.editor_text)
+        self.editor_text = TextInput(
+            text=content,
+            multiline=True,
+            size_hint_y=0.85,
+            background_color=(0.1, 0.1, 0.1, 1),
+            foreground_color=(1, 1, 1, 1),
+            font_size=16,
+        )
+        self.files_area.add_widget(self.editor_text)
 
-        
         btns = BoxLayout(size_hint_y=None, height=50, spacing=10)
-        btns.add_widget(styled_button("Salvar", self.save_file))
-        btns.add_widget(styled_button("Voltar", lambda *_: self.refresh_file_manager()))
-        self.layout.add_widget(btns)
+        btns.add_widget(styled_button("💾 Salvar", self.save_file))
+        btns.add_widget(styled_button("↩️ Voltar", lambda *_: (self.restore_files_view(), self.show_directory(self.current_path))))
+        self.files_area.add_widget(btns)
 
     def save_file(self, instance):
-        """Salva o conteúdo editado"""
+        """Salva o arquivo editado"""
         with open(self.file_editor, "w", encoding="utf-8") as f:
             f.write(self.editor_text.text)
-        self.refresh_file_manager()
-
-    def refresh_file_manager(self):
-        """Recarrega o gerenciador após editar"""
-        self.layout.clear_widgets()
-        self.__init__()  
-        self.cpf_logado = self.manager.get_screen("recognition").cpf_logado
-        self.on_pre_enter()
-
+        self.show_directory(self.current_path)
 
 class CreateAccountScreen(Screen):
     def __init__(self, **kwargs):
@@ -361,33 +505,59 @@ class RecognitionScreen(Screen):
         super().__init__(**kwargs)
         self.cpf_logado = None
 
-        layout = BoxLayout(orientation="vertical", padding=20, spacing=10)
-        layout.add_widget(styled_label("Reconhecimento Facial", Theme.FONT_SIZE_TITLE))
+        # Layout principal
+        self.layout = BoxLayout(orientation="vertical", padding=20, spacing=10)
+        self.layout.add_widget(styled_label("Reconhecimento Facial", Theme.FONT_SIZE_TITLE))
 
         self.status_label = styled_label("Posicione seu rosto na câmera...")
-        layout.add_widget(self.status_label)
+        self.layout.add_widget(self.status_label)
 
         self.camera_widget = Image(size_hint=(1, 1))
-        layout.add_widget(self.camera_widget)
+        self.layout.add_widget(self.camera_widget)
 
-        voltar_btn = styled_button("Voltar", lambda *_: setattr(self.manager, 'current', 'login'))
-        layout.add_widget(voltar_btn)
+        # Botões inferiores
+        self.buttons_box = BoxLayout(size_hint_y=None, height=50, spacing=10)
+        self.voltar_btn = styled_button("Voltar", lambda *_: setattr(self.manager, 'current', 'login'))
+        self.buttons_box.add_widget(self.voltar_btn)
+        self.layout.add_widget(self.buttons_box)
 
-        self.add_widget(layout)
+        self.add_widget(self.layout)
 
+        # Controle de captura
         self.model = None
         self.capture = None
         self.event = None
+
+    def show_support_button(self):
+        """Exibe botão de suporte se ainda não estiver visível"""
+        if not any(btn.text.startswith("Dificuldades") for btn in self.buttons_box.children):
+            suporte_btn = styled_button(
+                "Dificuldades no login? Suporte",
+                lambda *_: setattr(self.manager, 'current', 'support')
+            )
+            suporte_btn.size_hint_x = 0.8
+            self.buttons_box.add_widget(suporte_btn)
+
+    def show_register_face_button(self):
+        """Exibe botão para ir à tela de cadastro"""
+        if not any(btn.text.startswith("Cadastrar rosto") for btn in self.buttons_box.children):
+            cadastrar_btn = styled_button(
+                "Cadastrar rosto agora",
+                lambda *_: setattr(self.manager, 'current', 'create_account')
+            )
+            self.buttons_box.add_widget(cadastrar_btn)
 
     def on_enter(self, *args):
         cpf = self.cpf_logado
         if not cpf:
             self.status_label.text = "Erro: Nenhum CPF em uso."
+            self.show_support_button()
             return
 
         self.capture = cv2.VideoCapture(0, cv2.CAP_DSHOW)
         if not self.capture.isOpened():
             self.status_label.text = "Erro: não foi possível acessar a câmera"
+            self.show_support_button()
             return
 
         self.train_model(cpf)
@@ -414,6 +584,7 @@ class RecognitionScreen(Screen):
 
         if len(Labels) == 0:
             self.status_label.text = "Nenhuma face cadastrada para este CPF."
+            self.show_register_face_button()
             return
 
         Labels = np.asarray(Labels, dtype=np.int32)
@@ -427,6 +598,7 @@ class RecognitionScreen(Screen):
         ret, frame = self.capture.read()
         if not ret:
             self.status_label.text = "Erro ao capturar frame"
+            self.show_support_button()
             return
 
         buf = cv2.flip(frame, 0).tobytes()
@@ -446,9 +618,26 @@ class RecognitionScreen(Screen):
                 confidence = int(100 * (1 - (result[1]) / 300))
 
                 if confidence > 75:
+                    time.sleep(2)
                     self.manager.current = "home"
                 else:
                     self.status_label.text = f"Face não reconhecida ({confidence}%)"
+                    self.show_support_button()
+
+
+class SupportScreen(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        layout = BoxLayout(orientation="vertical", padding=30, spacing=20)
+
+        layout.add_widget(styled_label("Suporte Técnico", Theme.FONT_SIZE_TITLE))
+        layout.add_widget(styled_label("Se estiver enfrentando dificuldades no login, entre em contato:"))
+        layout.add_widget(styled_label("+55 61 991876314", Theme.FONT_SIZE_LABEL, [0, 0.7, 0, 1]))
+
+        voltar_btn = styled_button("Voltar", lambda *_: setattr(self.manager, 'current', 'recognition'))
+        layout.add_widget(voltar_btn)
+
+        self.add_widget(layout)
 
 class HomeScreen(Screen):
     def __init__(self, **kwargs):
@@ -507,6 +696,7 @@ class MyApp(App):
         sm.add_widget(CreateAccountScreen(name="create_account"))
         sm.add_widget(RecognitionScreen(name="recognition"))
         sm.add_widget(HomeScreen(name="home"))
+        sm.add_widget(SupportScreen(name="support"))
         sm.add_widget(ResetRequestScreen(name="reset_request"))
         sm.add_widget(FileManagerScreen(name="file_manager"))  # ✅ nova tela
         return sm
