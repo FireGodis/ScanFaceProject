@@ -5,6 +5,16 @@ import sys
 import numpy as np
 import kivy
 import time
+from encryption_utils import (
+    init_encrypted_folder,
+    load_meta,
+    save_meta,
+    get_fernet_for_folder,
+    encrypt_bytes,
+    decrypt_bytes,
+    save_encrypted_file,
+    read_encrypted_file,
+)
 from kivy.core.window import Window
 from kivy.app import App
 from kivy.clock import Clock
@@ -35,6 +45,24 @@ from kivy.clock import Clock
 from kivy.uix.textinput import TextInput
 from kivy.uix.screenmanager import ScreenManager, Screen, WipeTransition
 from kivy.graphics.texture import Texture
+import threading
+
+# helpers de encriptação / UX
+def is_encrypted_folder(folder_path: str) -> bool:
+    return os.path.exists(os.path.join(folder_path, ".meta.json"))
+
+# armazena senhas desbloqueadas durante a sessão (App instance terá atributo)
+def get_unlocked_password(app, folder_path):
+    # retorna senha ou None
+    return getattr(app, "encryption_passwords", {}).get(folder_path)
+
+def set_unlocked_password(app, folder_path, password):
+    if not hasattr(app, "encryption_passwords"):
+        app.encryption_passwords = {}
+    app.encryption_passwords[folder_path] = password
+
+
+
 
 kivy.require('1.11.1')
 Config.set('input', 'mouse', 'mouse,multitouch_on_demand')
@@ -45,6 +73,75 @@ if not os.path.exists("faces"):
 
 if not os.path.exists("cadastros"):
     os.makedirs("cadastros")
+
+def encrypt_existing_folder(folder_path: str, password: str):
+    """
+    Inicializa a pasta (escreve .meta.json) e regrava todos os arquivos no diretório
+    em formato criptografado, removendo os originais.
+    Não desce recursivamente por subpastas por simplicidade (pode adicionar).
+    """
+    # inicializa meta
+    init_encrypted_folder(folder_path, password)
+
+    # lista arquivos — ignora .meta.json
+    for fname in os.listdir(folder_path):
+        if fname == ".meta.json":
+            continue
+        full = os.path.join(folder_path, fname)
+        if os.path.isfile(full):
+            # lê original
+            with open(full, "rb") as f:
+                raw = f.read()
+            # salva criptografado no mesmo nome
+            save_encrypted_file(full, folder_path, password, raw)
+            # sobrescreveu com conteúdo criptografado (já ok). 
+            # Se preferir, pode escrever para nome-ofuscado e remover original.
+
+# converter cadastros
+#encrypt_existing_folder("cadastros", "SUA_SENHA_MASTER")
+
+# converter faces
+#encrypt_existing_folder("faces", "SUA_SENHA_MASTER")
+
+
+
+
+def ask_password_popup(app, folder_path, title="Senha necessária", message="Digite a senha:"):
+    """
+    Mostra popup pedindo senha. Se o usuário confirmar com a senha correta (testa
+    tentando obter fernet), salva a senha em app.encryption_passwords e retorna True.
+    Retorna False se cancelou/errou.
+    """
+    result = {"ok": False}
+
+    layout = BoxLayout(orientation="vertical", spacing=10, padding=10)
+    layout.add_widget(Label(text=message))
+    pwd_input = TextInput(password=True, multiline=False, size_hint_y=None, height=40)
+    layout.add_widget(pwd_input)
+
+    btns = BoxLayout(size_hint_y=None, height=50, spacing=10)
+    def on_cancel(*_):
+        popup.dismiss()
+    def on_confirm(*_):
+        pwd = pwd_input.text.strip()
+        try:
+            # testa se a senha é válida pedindo um Fernet (vai lançar se salt errado)
+            f = get_fernet_for_folder(folder_path, pwd)
+            # se chegou aqui, senha válida
+            set_unlocked_password(app, folder_path, pwd)
+            result["ok"] = True
+        except Exception as e:
+            # senha inválida
+            result["ok"] = False
+        popup.dismiss()
+
+    btns.add_widget(styled_button("❌ Cancelar", on_cancel))
+    btns.add_widget(styled_button("✅ Confirmar", on_confirm))
+    layout.add_widget(btns)
+
+    popup = Popup(title=title, content=layout, size_hint=(None, None), size=(420, 220), auto_dismiss=False)
+    popup.open()
+    return result  # O chamador pode checar result["ok"] depois (ou usar get_unlocked_password)
 
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -141,21 +238,39 @@ class LoginScreen(Screen):
         cpf = self.cpf_input.text.strip()
         senha = self.senha_input.text.strip()
         filepath = os.path.join("cadastros", f"{cpf}.txt")
-
+        cad_folder = "cadastros"
+        
         if not os.path.exists(filepath):
             self.status_label.text = "CPF não cadastrado."
             return
 
-        with open(filepath, "r", encoding="utf-8") as f:
-            dados = f.read().splitlines()
-            dados_dict = {line.split(":")[0]: line.split(":")[1] for line in dados if ":" in line}
+        try:
+            if is_encrypted_folder(cad_folder):
+                app = App.get_running_app()
+                pwd = get_unlocked_password(app, cad_folder)
+                if not pwd:
+                    # Aqui você precisa definir a senha mestra da pasta, se já sabe:
+                    pwd = "senha123"
+                    set_unlocked_password(app, cad_folder, pwd)
 
-        if dados_dict.get("Senha") != senha:
-            self.status_label.text = "Senha incorreta."
-            return
+                # lê o arquivo descriptografado
+                dados_bytes = read_encrypted_file(filepath, cad_folder, pwd)
+                dados = dados_bytes.decode("utf-8").splitlines()
+            else:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    dados = f.read().splitlines()
 
-        self.manager.get_screen("recognition").cpf_logado = cpf
-        self.manager.current = "recognition"
+            dados_dict = {line.split(":")[0].strip(): line.split(":")[1].strip() for line in dados if ":" in line}
+
+            if dados_dict.get("Senha") != senha:
+                self.status_label.text = "Senha incorreta."
+                return
+
+            self.manager.get_screen("recognition").cpf_logado = cpf
+            self.manager.current = "recognition"
+
+        except Exception as e:
+            self.status_label.text = f"Erro ao ler cadastro: {e}"
 
 
 class FileManagerScreen(Screen):
@@ -336,11 +451,53 @@ class FileManagerScreen(Screen):
         self.show_directory(path)
 
     def create_folder(self, instance):
-        """Cria nova pasta"""
-        folder_name = f"NovaPasta_{len(os.listdir(self.current_path))}"
-        new_path = os.path.join(self.current_path, folder_name)
-        os.makedirs(new_path, exist_ok=True)
-        self.show_directory(self.current_path)
+        from kivy.uix.popup import Popup
+
+        # layout do popup
+        layout = BoxLayout(orientation="vertical", spacing=10, padding=10)
+        layout.add_widget(Label(text="Digite uma senha para criptografar a pasta\n(deixe em branco para pasta normal):"))
+
+        password_input = TextInput(password=True, multiline=False, size_hint_y=None, height=40)
+        layout.add_widget(password_input)
+
+        # botões (criados antes de anexar para manter a referência ao popup)
+        btns = BoxLayout(size_hint_y=None, height=50, spacing=10)
+
+        # Criamos o popup primeiro como placeholder (conteúdo será atribuído a seguir)
+        popup = Popup(title="Nova Pasta", content=layout, size_hint=(None, None), size=(400, 250), auto_dismiss=False)
+
+        # agora criamos os botões que usam 'popup' na closure
+        btn_cancel = styled_button("❌ Cancelar", lambda *_: popup.dismiss())
+
+        def confirmar_criacao(*_):
+            try:
+                folder_name = f"NovaPasta_{len(os.listdir(self.current_path))}"
+                new_path = os.path.join(self.current_path, folder_name)
+                os.makedirs(new_path, exist_ok=True)
+
+                senha = password_input.text.strip()
+                if senha:
+                    # inicializa pasta criptografada (escreve .meta)
+                    init_encrypted_folder(new_path, senha)
+            except Exception as e:
+                print("Erro ao criar pasta:", e)
+            finally:
+                popup.dismiss()
+                # recarrega listagem (mesmo que tenha ocorrido erro, evita travar a UI)
+                self.show_directory(self.current_path)
+
+        btn_confirm = styled_button("✅ Criar", confirmar_criacao)
+
+        btns.add_widget(btn_cancel)
+        btns.add_widget(btn_confirm)
+        layout.add_widget(btns)
+
+        # abre o popup
+        popup = Popup(title="Nova Pasta", content=layout, size_hint=(None, None), size=(400, 250))
+        popup.open()
+
+
+    
 
     def create_file(self, instance):
         """Cria novo arquivo"""
@@ -377,12 +534,84 @@ class FileManagerScreen(Screen):
         self.files_area.add_widget(btns)
 
     def save_file(self, instance):
-        """Salva o arquivo editado"""
-        with open(self.file_editor, "w", encoding="utf-8") as f:
-            f.write(self.editor_text.text)
-        self.show_directory(self.current_path)
+        meta_path = os.path.join(self.current_path, ".meta.json")
+
+        if os.path.exists(meta_path):
+            # Pasta criptografada
+            layout = BoxLayout(orientation="vertical", spacing=10, padding=10)
+            layout.add_widget(Label(text="Digite a senha para salvar o arquivo:"))
+            password_input = TextInput(password=True, multiline=False, size_hint_y=None, height=40)
+            layout.add_widget(password_input)
+
+            btns = BoxLayout(size_hint_y=None, height=50, spacing=10)
+            btn_cancel = styled_button("❌ Cancelar", lambda *_: popup.dismiss())
+
+            def confirmar_salvar(*_):
+                senha = password_input.text.strip()
+                try:
+                    save_encrypted_file(self.file_editor, self.current_path, senha, self.editor_text.text.encode("utf-8"))
+                    popup.dismiss()
+                    self.show_directory(self.current_path)
+                except Exception as e:
+                    print("Erro ao salvar arquivo criptografado:", e)
+                    popup.dismiss()
+
+            btn_confirm = styled_button("✅ Salvar", confirmar_salvar)
+            btns.add_widget(btn_cancel)
+            btns.add_widget(btn_confirm)
+            layout.add_widget(btns)
+
+            popup = Popup(title="Salvar arquivo criptografado", content=layout, size_hint=(None, None), size=(400, 250))
+            popup.open()
+
+        else:
+            # Arquivo normal
+            with open(self.file_editor, "w", encoding="utf-8") as f:
+                f.write(self.editor_text.text)
+            self.show_directory(self.current_path)
+
 
 class CreateAccountScreen(Screen):
+    def ask_password_popup_and_then(self, app, folder_path, callback, title="Senha necessária", message="Digite a senha:"):
+        # Garante que title e message sejam sempre strings
+        title = str(title) if title is not None else ""
+        message = str(message) if message is not None else ""
+
+        layout = BoxLayout(orientation="vertical", spacing=10, padding=10)
+        layout.add_widget(Label(text=message))
+        
+        pwd_input = TextInput(password=True, multiline=False, size_hint_y=None, height=40)
+        layout.add_widget(pwd_input)
+
+        btns = BoxLayout(size_hint_y=None, height=50, spacing=10)
+
+        popup = Popup(
+            title=title,
+            content=layout,
+            size_hint=(None, None),
+            size=(420, 220),
+            auto_dismiss=False
+        )
+
+        def on_cancel(*_):
+            popup.dismiss()
+
+        def on_confirm(*_):
+            pwd = pwd_input.text.strip()
+            try:
+                f = get_fernet_for_folder(folder_path, pwd)  # testa senha
+                set_unlocked_password(app, folder_path, pwd)
+            except Exception as e:
+                # senha inválida — não definir
+                set_unlocked_password(app, folder_path, None)
+            popup.dismiss()
+            callback()  # chama o callback após fechar o popup
+
+        btns.add_widget(styled_button("❌ Cancelar", on_cancel))
+        btns.add_widget(styled_button("✅ Confirmar", on_confirm))
+        layout.add_widget(btns)
+
+        popup.open()
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         main_layout = BoxLayout(orientation="horizontal", padding=20, spacing=10)
@@ -470,8 +699,25 @@ class CreateAccountScreen(Screen):
                 face = cv2.cvtColor(face, cv2.COLOR_BGR2GRAY)
 
                 cpf = self.cpf_input.text.strip()
-                file_name_path = f"faces/{cpf}({self.frames_captured}).png"
-                cv2.imwrite(file_name_path, face)
+                file_name_path = os.path.join("faces", f"{cpf}({self.frames_captured}).png")
+                # converte image (numpy) para bytes PNG
+                _, buf = cv2.imencode('.png', face)
+                img_bytes = buf.tobytes()
+
+                faces_folder = "faces"
+                app = App.get_running_app()
+                if is_encrypted_folder(faces_folder):
+                    pwd = get_unlocked_password(app, faces_folder)
+                    if not pwd:
+                        # pede senha e, após confirmar, poderá continuar captura (ou abortar)
+                        # para simplificar, podemos impedir salvar até desbloquear
+                        self.progress_label.text = "Pasta 'faces' protegida. Desbloqueie antes de capturar."
+                    else:
+                        save_encrypted_file(file_name_path, faces_folder, pwd, img_bytes)
+                else:
+                    # salva normalmente no disco
+                    with open(file_name_path, "wb") as f:
+                        f.write(img_bytes)
 
                 if self.frames_captured < 100:
                     self.progress_label.text = f"Analisando Rosto {self.frames_captured}/100..."
@@ -486,24 +732,46 @@ class CreateAccountScreen(Screen):
             self.capture = None
         Clock.unschedule(self.update_camera)
 
+    
+
     def save_account(self, instance):
         cpf = self.cpf_input.text.strip()
         filepath = os.path.join("cadastros", f"{cpf}.txt")
+        content = f"Nome:{self.nome_input.text}\nCPF:{cpf}\nCargo:{self.cargo_input.text}\nEmail:{self.email_input.text}\nSenha:{self.senha_input.text}\n"
+        cad_folder = "cadastros"
 
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(f"Nome:{self.nome_input.text}\n")
-            f.write(f"CPF:{cpf}\n")
-            f.write(f"Cargo:{self.cargo_input.text}\n")
-            f.write(f"Email:{self.email_input.text}\n")
-            f.write(f"Senha:{self.senha_input.text}\n")
-
-        self.progress_label.text = "Cadastro salvo com sucesso!"
+        # Se a pasta cadastros estiver criptografada, pede senha (se não desbloqueada)
+        if is_encrypted_folder(cad_folder):
+            app = App.get_running_app()
+            pwd = get_unlocked_password(app, cad_folder)
+            if not pwd:
+                # pede senha com popup e retorna via callback — aqui vamos abrir popup que chama salvar
+                def after_popup():
+                    pwd2 = get_unlocked_password(app, cad_folder)
+                    if pwd2:
+                        # salva criptografado
+                        save_encrypted_file(filepath, cad_folder, pwd2, content.encode("utf-8"))
+                        self.progress_label.text = "Cadastro salvo (criptografado)!"
+                    else:
+                        self.progress_label.text = "Senha inválida. Cadastro não salvo."
+                # abre popup pedindo senha; on confirm sets unlocked password — we reuse ask_password_popup logic but using a callback:
+                self.ask_password_popup_and_then(app, cad_folder, after_popup)
+                return
+            else:
+                save_encrypted_file(filepath, cad_folder, pwd, content.encode("utf-8"))
+                self.progress_label.text = "Cadastro salvo (criptografado)!"
+        else:
+            # pasta normal
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(content)
+            self.progress_label.text = "Cadastro salvo com sucesso!"
 
 
 class RecognitionScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.cpf_logado = None
+        self.master_password = "senha123"  # mesma senha usada no encrypt_existing_folder()
 
         # Layout principal
         self.layout = BoxLayout(orientation="vertical", padding=20, spacing=10)
@@ -538,15 +806,6 @@ class RecognitionScreen(Screen):
             suporte_btn.size_hint_x = 0.8
             self.buttons_box.add_widget(suporte_btn)
 
-    def show_register_face_button(self):
-        """Exibe botão para ir à tela de cadastro"""
-        if not any(btn.text.startswith("Cadastrar rosto") for btn in self.buttons_box.children):
-            cadastrar_btn = styled_button(
-                "Cadastrar rosto agora",
-                lambda *_: setattr(self.manager, 'current', 'create_account')
-            )
-            self.buttons_box.add_widget(cadastrar_btn)
-
     def on_enter(self, *args):
         cpf = self.cpf_logado
         if not cpf:
@@ -563,28 +822,25 @@ class RecognitionScreen(Screen):
         self.train_model(cpf)
         self.event = Clock.schedule_interval(self.update_camera, 1.0 / 30.0)
 
-    def on_leave(self, *args):
-        if self.event:
-            Clock.unschedule(self.event)
-            self.event = None
-        if self.capture:
-            self.capture.release()
-            self.capture = None
-
     def train_model(self, cpf):
         data_path = "faces/"
         onlyfiles = [f for f in os.listdir(data_path) if f.startswith(cpf)]
 
         Training_Data, Labels = [], []
         for i, file in enumerate(onlyfiles):
-            image_path = os.path.join(data_path, file)
-            images = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-            Training_Data.append(np.asarray(images, dtype=np.uint8))
-            Labels.append(i)
+            try:
+                encrypted_data = read_encrypted_file(file, data_path, self.master_password)
+                img_array = np.frombuffer(encrypted_data, np.uint8)
+                images = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
+                if images is not None:
+                    Training_Data.append(np.asarray(images, dtype=np.uint8))
+                    Labels.append(i)
+            except Exception as e:
+                print(f"[ERRO] Falha ao ler imagem criptografada {file}: {e}")
 
         if len(Labels) == 0:
             self.status_label.text = "Nenhuma face cadastrada para este CPF."
-            self.show_register_face_button()
+            self.show_support_button()
             return
 
         Labels = np.asarray(Labels, dtype=np.int32)
@@ -609,6 +865,7 @@ class RecognitionScreen(Screen):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = face_classifier.detectMultiScale(gray, 1.3, 5)
 
+        face_recognized = False
         for (x, y, w, h) in faces:
             roi = gray[y:y+h, x:x+w]
             roi = cv2.resize(roi, (200, 200))
@@ -616,14 +873,17 @@ class RecognitionScreen(Screen):
             if self.model is not None:
                 result = self.model.predict(roi)
                 confidence = int(100 * (1 - (result[1]) / 300))
-
                 if confidence > 75:
-                    time.sleep(2)
-                    self.manager.current = "home"
-                else:
-                    self.status_label.text = f"Face não reconhecida ({confidence}%)"
-                    self.show_support_button()
+                    face_recognized = True
+                    break
 
+        if face_recognized:
+            time.sleep(1)
+            self.status_label.text = "Rosto reconhecido com sucesso!"
+            self.manager.current = "home"
+        else:
+            self.status_label.text = "Face não reconhecida ou erro de confiança"
+            self.show_support_button()
 
 class SupportScreen(Screen):
     def __init__(self, **kwargs):
