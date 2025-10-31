@@ -32,29 +32,19 @@ if not os.path.exists("faces"):
 if not os.path.exists("cadastros"):
     os.makedirs("cadastros")
 
+# Caminho correto para PyInstaller
+if getattr(sys, 'frozen', False):
+    # Executando a partir do .exe
+    base_path = sys._MEIPASS
+else:
+    # Executando no Python normal
+    base_path = os.path.abspath(".")
 
-base_dir = os.path.dirname(os.path.abspath(__file__))
-def resource_path(relative_path):
-    try:
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
+haarcascade_path = os.path.join(base_path, "lib", "haarcascade_frontalface_default.xml")
 
-cascade_path = resource_path(os.path.join(".\python-recognition-opencv\project\lib", "haarcascade_frontalface_default.xml"))
-face_cascade = cv2.CascadeClassifier(cascade_path)
-
-if face_cascade.empty():
-    raise Exception(f"Erro ao carregar o classificador! Caminho verificado: {cascade_path}")
-
-
-face_classifier = cv2.CascadeClassifier(cascade_path)
-
-
+face_classifier = cv2.CascadeClassifier(haarcascade_path)
 if face_classifier.empty():
-    raise Exception(f"Erro ao carregar o classificador! Caminho verificado: {cascade_path}")
-
-
+    raise Exception(f"Erro ao carregar o classificador! Caminho verificado: {haarcascade_path}")
 
 def upload_file(self, instance):
     
@@ -438,6 +428,7 @@ class CreateAccountScreen(Screen):
         form_layout.add_widget(self.nome_input)
 
         self.cpf_input = styled_input("CPF *")
+        self.cpf_input.input_filter = 'int'  # aceita apenas números
         form_layout.add_widget(self.cpf_input)
 
         self.cargo_input = styled_input("Cargo *")
@@ -481,6 +472,9 @@ class CreateAccountScreen(Screen):
         self.cpf_input.bind(text=self.on_cpf_text)
 
     def on_cpf_text(self, instance, value):
+        # Aceita apenas números e limita a 11 dígitos
+        instance.text = ''.join(filter(str.isdigit, value))[:11]
+        self.capturar_btn.disabled = not bool(instance.text)
         if value.strip():
             self.capturar_btn.disabled = False
         else:

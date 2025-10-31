@@ -100,6 +100,10 @@ python -m PyInstaller main.py ^
     --noconsole ^
     --add-data ".venv\Lib\site-packages\kivy\data;kivy_install\data" ^
     --add-data ".venv\Lib\site-packages\cv2\data;cv2\data" ^
+    --add-data "..\..\faces;faces" ^
+    --add-data "..\..\cadastros;cadastros" ^
+    --add-data "..\..\pasta_usuarios;pasta_usuarios" ^
+    --add-data "..\..\lib;lib" ^
     --hidden-import=kivy.weakmethod ^
     --hidden-import=numpy ^
     --hidden-import=cv2 ^

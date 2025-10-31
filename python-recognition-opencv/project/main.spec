@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('C:\\Users\\luizh\\Documents\\GitHub\\FaceScan_Github\\python-recognition-opencv\\project\\.venv310\\Lib\\site-packages\\kivy\\data', 'kivy_install\\data'), ('C:\\Users\\luizh\\Documents\\GitHub\\FaceScan_Github\\python-recognition-opencv\\project\\.venv310\\lib\\site-packages\\cv2\\data\\haarcascade_frontalface_default.xml', 'lib')],
+    datas=[('.venv\\Lib\\site-packages\\kivy\\data', 'kivy_install\\data'), ('.venv\\Lib\\site-packages\\cv2\\data', 'cv2\\data'), ('..\\..\\faces', 'faces'), ('..\\..\\cadastros', 'cadastros'), ('..\\..\\pasta_usuarios', 'pasta_usuarios'), ('..\\..\\lib', 'lib')],
     hiddenimports=['kivy.weakmethod', 'numpy', 'cv2'],
     hookspath=['hooks'],
     hooksconfig={},

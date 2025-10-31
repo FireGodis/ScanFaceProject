@@ -1,0 +1,5 @@
+Nome:teste
+CPF:12345678910
+Cargo:vagabundo
+Email:ricagames@gmail.com
+Senha:123

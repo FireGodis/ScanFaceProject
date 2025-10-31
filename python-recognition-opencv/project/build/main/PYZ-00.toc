@@ -1,4 +1,4 @@
-('C:\\Users\\luizh\\Documents\\GitHub\\FaceScan_Github\\python-recognition-opencv\\project\\build\\main\\PYZ-00.pyz',
+('C:\\Users\\luizh\\Documents\\GitHub\\ScanFaceProject\\python-recognition-opencv\\project\\build\\main\\PYZ-00.pyz',
  [('PyInstaller',
    'C:\\Users\\luizh\\AppData\\Roaming\\Python\\Python313\\site-packages\\PyInstaller\\__init__.py',
    'PYMODULE'),
